@@ -4,6 +4,14 @@ A smart Android water-tracking app that helps you stay hydrated with **per-bottl
 
 ## Features
 
+### Alarm-Clock Deadline Alerts
+- When a bottle deadline is missed, a **full alarm fires** with looping sound and vibration
+- Ongoing notification with **Snooze (10 min)** and **Stop** action buttons
+- Alarm auto-stops after 5 minutes
+- Opening the app silences any active alarm
+- Configurable sound and vibration toggles in Settings
+- **Test Alarm** button in Settings to verify the alarm system works
+
 ### Deadline-Based Reminders
 - Each bottle gets its own deadline spread across your active hours (e.g., Bottle 1 by 11:15, Bottle 2 by 15:30, Bottle 3 by 20:00)
 - **On schedule**: reminders at halfway point, 30 minutes before, and 10 minutes before each deadline
@@ -31,12 +39,10 @@ A smart Android water-tracking app that helps you stay hydrated with **per-bottl
 - **Bottle size**: 800ml default
 - **Active hours**: customizable start/end (default 07:00-20:00)
 - **Bottle deadlines**: per-bottle time pickers with "Reset to defaults"
+- **Deadline alerts**: sound on/off, vibrate on/off, test alarm button
 - **Appearance**: System / Light / Dark theme
 - **Notifications**: enable/disable toggle
-
-## Screenshots
-
-*Coming soon*
+- **Version**: displayed at bottom of settings page
 
 ## Architecture
 
@@ -53,9 +59,13 @@ app/src/main/java/com/drinkreminder/app/
 ├── di/
 │   └── AppModule.kt                # Hilt dependency injection module
 ├── notification/
-│   ├── NotificationHelper.kt       # Builds & shows notifications
-│   ├── ReminderScheduler.kt        # Deadline-aware WorkManager scheduling
-│   └── ReminderWorker.kt           # Background worker for reminders
+│   ├── AlarmActionReceiver.kt      # Handles Snooze/Stop notification actions
+│   ├── AlarmReceiver.kt            # Receives alarm broadcasts, starts AlarmService
+│   ├── AlarmService.kt             # Foreground service: alarm sound + vibration
+│   ├── BootReceiver.kt             # Reschedules alarms after device reboot
+│   ├── NotificationHelper.kt       # Builds & shows notifications (3 channels)
+│   ├── ReminderScheduler.kt        # Deadline-aware AlarmManager scheduling
+│   └── ReminderWorker.kt           # Periodic WorkManager fallback
 ├── ui/
 │   ├── components/
 │   │   ├── BarChart.kt             # History bar chart
@@ -83,12 +93,31 @@ app/src/main/java/com/drinkreminder/app/
 └── MainActivity.kt                 # Single activity host
 ```
 
+### Alarm System Architecture
+
+```
+setAlarmClock() at deadline + 90s
+  → AlarmReceiver.onReceive() [synchronous]
+    → startForegroundService(AlarmService)
+      → startForeground() with silent checking notification [immediate]
+        → DB check in coroutine
+          → Behind? Upgrade to alarm notification + MediaPlayer + Vibrator
+          → On track? stopSelf() silently
+
+Snooze → AlarmActionReceiver → setAlarmClock() +10min → same chain
+Stop → AlarmActionReceiver → stops AlarmService + cancels notification
+Reboot → BootReceiver → rescheduleReminders()
+App open → stopService + cancel notification
+Auto-timeout → 5 minutes
+```
+
 ### Pattern: MVVM + Repository
 
 - **View**: Jetpack Compose screens observe `StateFlow<UiState>` from ViewModels
 - **ViewModel**: Combines data flows, exposes actions, triggers reminder rescheduling
 - **Repository**: Mediates between Room DAO (drink logs) and DataStore (preferences)
-- **WorkManager**: Handles background reminder scheduling with deadline-aware logic
+- **AlarmManager**: Exact deadline alarms via `setAlarmClock()` (guaranteed delivery + FGS exemption)
+- **WorkManager**: Periodic fallback worker every hour for edge cases
 
 ### Reminder Algorithm
 
@@ -96,7 +125,8 @@ app/src/main/java/com/drinkreminder/app/
 2. Find the next deadline from the deadlines list
 3. If **on schedule**: schedule reminders at halfway, 30 min before, and 10 min before the deadline (minimum 10-min spacing, deduplicated)
 4. If **behind schedule** (past the deadline): fire an immediate urgent reminder, then repeat every 30 min until the next future deadline or end of active hours
-5. A periodic fallback worker runs every hour to catch edge cases
+5. At each deadline + 90 seconds: fire a deadline-check alarm that triggers the full alarm-clock experience if behind
+6. A periodic fallback worker runs every hour to catch edge cases
 
 ## Tech Stack
 
@@ -137,9 +167,13 @@ Or open the project in Android Studio and click Run.
 
 | Permission | Purpose |
 |------------|---------|
-| `POST_NOTIFICATIONS` | Show drink reminders |
-| `SCHEDULE_EXACT_ALARM` | Schedule precise reminder times |
+| `POST_NOTIFICATIONS` | Show drink reminders and alarm notifications (runtime request on Android 13+) |
+| `SCHEDULE_EXACT_ALARM` | Schedule precise reminder times (fallback for passive reminders) |
 | `RECEIVE_BOOT_COMPLETED` | Restore reminders after device reboot |
+| `VIBRATE` | Alarm vibration when deadline is missed |
+| `FOREGROUND_SERVICE` | Alarm service with looping sound and vibration |
+| `FOREGROUND_SERVICE_SPECIAL_USE` | Required for alarm-style foreground service |
+| `USE_FULL_SCREEN_INTENT` | Full-screen alarm notification on lock screen |
 
 ## License
 

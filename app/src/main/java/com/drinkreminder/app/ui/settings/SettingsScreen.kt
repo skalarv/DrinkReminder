@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import android.widget.Toast
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,8 +37,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.drinkreminder.app.BuildConfig
 import com.drinkreminder.app.ui.theme.DarkModeOption
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -218,9 +223,32 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setAlarmVibrate(it) }
                 )
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            val testContext = LocalContext.current
+            Button(
+                onClick = {
+                    viewModel.fireTestAlarm()
+                    Toast.makeText(testContext, "Test alarm in 10 seconds...", Toast.LENGTH_LONG).show()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Test Alarm (10s)")
+            }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Version info
+        Text(
+            text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
+        )
     }
 }
 

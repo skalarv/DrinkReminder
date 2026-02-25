@@ -8,6 +8,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -26,6 +28,7 @@ class NotificationHelper @Inject constructor(
     companion object {
         const val CHANNEL_ID = "drink_reminders"
         const val ALARM_CHANNEL_ID = "deadline_alarms"
+        const val ALARM_CHECK_CHANNEL_ID = "deadline_alarm_check"
         const val NOTIFICATION_ID = 1001
         const val ALARM_NOTIFICATION_ID = 1002
     }
@@ -43,14 +46,46 @@ class NotificationHelper @Inject constructor(
         notificationManager.createNotificationChannel(channel)
     }
 
+    /**
+     * High-importance alarm channel WITH sound and vibration enabled.
+     * Used for the actual alarm notification (and as fallback if service fails).
+     */
     fun createAlarmNotificationChannel() {
+        val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
         val channel = NotificationChannel(
             ALARM_CHANNEL_ID,
             context.getString(R.string.alarm_channel_name),
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
             description = context.getString(R.string.alarm_channel_description)
-            // Sound and vibration managed by AlarmService directly
+            setSound(
+                alarmSound,
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 500, 500, 500, 500)
+        }
+
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    /**
+     * Low-importance silent channel for the brief "checking deadline" phase.
+     * Prevents false alarm sounds when user is actually on track.
+     */
+    fun createAlarmCheckChannel() {
+        val channel = NotificationChannel(
+            ALARM_CHECK_CHANNEL_ID,
+            "Deadline Checks",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Brief check when a deadline passes"
             setSound(null, null)
             enableVibration(false)
         }
@@ -116,11 +151,31 @@ class NotificationHelper @Inject constructor(
         NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
     }
 
+    /**
+     * Silent checking notification for the foreground service's initial startForeground call.
+     * Uses the low-importance check channel to avoid false alarm sounds.
+     */
+    fun buildCheckingNotification(): Notification {
+        createAlarmCheckChannel()
+
+        return NotificationCompat.Builder(context, ALARM_CHECK_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setContentTitle("Checking deadline...")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
+            .build()
+    }
+
+    /**
+     * Full alarm notification with Snooze/Stop actions.
+     * Uses the alarm channel (with sound and vibration).
+     */
     fun buildAlarmNotification(
         targetBottle: Int,
         deadlineTime: String,
         todayTotalMl: Int,
-        targetMl: Int
+        targetMl: Int,
+        silent: Boolean = false
     ): Notification {
         createAlarmNotificationChannel()
 
@@ -149,19 +204,39 @@ class NotificationHelper @Inject constructor(
             context, 3, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val body = "Bottle $targetBottle was due by $deadlineTime. You've had ${todayTotalMl}ml of ${targetMl}ml so far."
+
         return NotificationCompat.Builder(context, ALARM_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentTitle("Deadline missed!")
-            .setContentText("Bottle $targetBottle was due by $deadlineTime. You've had ${todayTotalMl}ml of ${targetMl}ml so far.")
-            .setStyle(NotificationCompat.BigTextStyle()
-                .bigText("Bottle $targetBottle was due by $deadlineTime. You've had ${todayTotalMl}ml of ${targetMl}ml so far."))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .apply { if (silent) setSilent(true) } // When silent=true, suppress channel sound — AlarmService MediaPlayer handles looping audio
             .setOngoing(true)
             .setContentIntent(openPendingIntent)
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .addAction(android.R.drawable.ic_popup_reminder, "Snooze 10 min", snoozePendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
             .build()
+    }
+
+    /**
+     * Fallback: post the alarm notification directly (no foreground service needed).
+     * The channel's built-in alarm sound and vibration will fire once.
+     */
+    fun showFallbackAlarmNotification(
+        targetBottle: Int,
+        deadlineTime: String,
+        todayTotalMl: Int,
+        targetMl: Int
+    ) {
+        val notification = buildAlarmNotification(targetBottle, deadlineTime, todayTotalMl, targetMl)
+        try {
+            NotificationManagerCompat.from(context).notify(ALARM_NOTIFICATION_ID, notification)
+        } catch (_: Exception) {
+            // Last resort — nothing we can do
+        }
     }
 }

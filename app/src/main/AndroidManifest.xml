@@ -33,7 +33,11 @@
         <service
             android:name=".notification.AlarmService"
             android:foregroundServiceType="specialUse"
-            android:exported="false" />
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Alarm-style deadline alerts with sound and vibration for missed hydration goals" />
+        </service>
 
         <receiver
             android:name=".notification.AlarmReceiver"
@@ -42,6 +46,14 @@
         <receiver
             android:name=".notification.AlarmActionReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".notification.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".widget.DrinkWidgetReceiver"

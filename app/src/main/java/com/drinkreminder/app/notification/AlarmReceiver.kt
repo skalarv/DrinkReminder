@@ -34,13 +34,35 @@ class AlarmReceiver : BroadcastReceiver() {
         val isDeadlineCheck = intent.getBooleanExtra(EXTRA_IS_DEADLINE_CHECK, false)
 
         if (isDeadlineCheck) {
-            handleDeadlineCheck(context, intent)
+            handleDeadlineCheck(context)
         } else {
             handlePassiveReminder(intent)
         }
     }
 
-    private fun handleDeadlineCheck(context: Context, intent: Intent) {
+    private fun handleDeadlineCheck(context: Context) {
+        // Try the foreground service (best experience: looping sound + vibration).
+        // startForegroundService must be called SYNCHRONOUSLY from onReceive
+        // to guarantee the FGS start exemption from the alarm broadcast.
+        try {
+            val serviceIntent = Intent(context, AlarmService::class.java).apply {
+                putExtra(AlarmService.EXTRA_IS_DEADLINE_CHECK, true)
+            }
+            context.startForegroundService(serviceIntent)
+        } catch (_: Exception) {
+            // Foreground service failed (permission, OEM restriction, etc.)
+            // Fall back to direct notification with channel-managed alarm sound.
+            handleDeadlineCheckFallback()
+        }
+    }
+
+    /**
+     * Fallback when foreground service cannot start.
+     * Posts a high-priority alarm notification directly from the receiver.
+     * The alarm channel has sound + vibration enabled, so the user gets
+     * at least one alarm tone and vibration burst.
+     */
+    private fun handleDeadlineCheckFallback() {
         val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -55,27 +77,20 @@ class AlarmReceiver : BroadcastReceiver() {
 
                 val now = LocalTime.now()
                 val completedBottles = todayTotal / bottleSize
-
-                // Find which bottle should have been completed by now
                 val dueBottles = deadlines.indexOfLast { !it.isAfter(now) } + 1
 
-                if (completedBottles >= dueBottles) {
-                    // User is on track — no alarm needed
-                    return@launch
-                }
+                if (completedBottles >= dueBottles) return@launch
 
-                // User is behind — determine the missed bottle
                 val targetBottle = completedBottles + 1
                 val deadline = deadlines.getOrNull(completedBottles) ?: return@launch
                 val targetMl = targetBottle * bottleSize
 
-                val serviceIntent = Intent(context, AlarmService::class.java).apply {
-                    putExtra(AlarmService.EXTRA_TARGET_BOTTLE, targetBottle)
-                    putExtra(AlarmService.EXTRA_DEADLINE_TIME, deadline.format(timeFormatter))
-                    putExtra(AlarmService.EXTRA_TODAY_TOTAL_ML, todayTotal)
-                    putExtra(AlarmService.EXTRA_TARGET_ML, targetMl)
-                }
-                context.startForegroundService(serviceIntent)
+                notificationHelper.showFallbackAlarmNotification(
+                    targetBottle = targetBottle,
+                    deadlineTime = deadline.format(timeFormatter),
+                    todayTotalMl = todayTotal,
+                    targetMl = targetMl
+                )
             } finally {
                 pendingResult.finish()
             }

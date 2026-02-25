@@ -1,11 +1,19 @@
 package com.drinkreminder.app.ui.settings
 
+import android.app.AlarmManager
+import android.app.AlarmManager.AlarmClockInfo
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.drinkreminder.app.MainActivity
 import com.drinkreminder.app.data.repository.DrinkRepository
+import com.drinkreminder.app.notification.AlarmReceiver
 import com.drinkreminder.app.notification.ReminderScheduler
 import com.drinkreminder.app.ui.theme.DarkModeOption
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -27,6 +35,7 @@ data class SettingsUiState(
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val repository: DrinkRepository,
     private val reminderScheduler: ReminderScheduler
 ) : ViewModel() {
@@ -149,6 +158,36 @@ class SettingsViewModel @Inject constructor(
     fun setAlarmSound(enabled: Boolean) {
         viewModelScope.launch {
             repository.setAlarmSound(enabled)
+        }
+    }
+
+    /**
+     * Fire a test deadline alarm in 10 seconds via the full alarm chain:
+     * setAlarmClock → AlarmReceiver → AlarmService → sound/vibration
+     */
+    fun fireTestAlarm() {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val triggerTime = System.currentTimeMillis() + 10_000L // 10 seconds
+
+        val alarmIntent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra(AlarmReceiver.EXTRA_IS_DEADLINE_CHECK, true)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context, 5000, alarmIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val showIntent = Intent(context, MainActivity::class.java)
+        val showPendingIntent = PendingIntent.getActivity(
+            context, 0, showIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        try {
+            alarmManager.setAlarmClock(AlarmClockInfo(triggerTime, showPendingIntent), pendingIntent)
+        } catch (_: SecurityException) {
+            // Fallback
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         }
     }
 }

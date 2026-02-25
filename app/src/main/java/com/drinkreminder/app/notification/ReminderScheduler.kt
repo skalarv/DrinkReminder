@@ -1,6 +1,7 @@
 package com.drinkreminder.app.notification
 
 import android.app.AlarmManager
+import android.app.AlarmManager.AlarmClockInfo
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -69,6 +70,7 @@ class ReminderScheduler @Inject constructor(
         val remainingBottles = goalBottles - completedBottles
 
         if (remainingBottles <= 0) return
+        if (deadlines.isEmpty()) return
 
         val nextDeadlineIdx = completedBottles.coerceIn(0, deadlines.size - 1)
 
@@ -183,8 +185,24 @@ class ReminderScheduler @Inject constructor(
             }
         }
 
-        // Schedule deadline-check alarms at exact deadline times
-        val deadlineAlarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        // Schedule deadline-check alarms 90 seconds AFTER each deadline time.
+        // Uses setAlarmClock() which is the MOST RELIABLE alarm API:
+        //  1. Always exact — not subject to battery optimization deferrals
+        //  2. Does NOT require SCHEDULE_EXACT_ALARM permission
+        //  3. Grants a guaranteed foreground-service start exemption
+        //  4. Shows alarm icon in status bar (signals upcoming alarm to user)
+        // The 90s buffer ensures the deadline has clearly passed when AlarmReceiver
+        // checks whether the user is behind, avoiding false-negative races.
+        val deadlineBufferMs = 90_000L // 90 seconds after deadline
+
+        // PendingIntent for the alarm clock "show" action (opens app when user taps clock icon)
+        val showIntent = Intent(context, com.drinkreminder.app.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context, 0, showIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         deadlines.forEachIndexed { index, deadline ->
             if (index < MAX_DEADLINE_ALARMS && deadline.isAfter(currentTime)) {
                 val deadlineIntent = Intent(context, AlarmReceiver::class.java).apply {
@@ -197,23 +215,23 @@ class ReminderScheduler @Inject constructor(
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
 
-                val deadlineDelayMinutes = Duration.between(currentTime, deadline).toMinutes()
-                val deadlineTriggerTimeMs = System.currentTimeMillis() + deadlineDelayMinutes * 60 * 1000
+                val delayMs = Duration.between(currentTime, deadline).toMillis() + deadlineBufferMs
+                val deadlineTriggerTimeMs = System.currentTimeMillis() + delayMs
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (deadlineAlarmManager.canScheduleExactAlarms()) {
-                        deadlineAlarmManager.setExactAndAllowWhileIdle(
+                try {
+                    val alarmClockInfo = AlarmClockInfo(deadlineTriggerTimeMs, showPendingIntent)
+                    alarmManager.setAlarmClock(alarmClockInfo, deadlinePendingIntent)
+                } catch (_: SecurityException) {
+                    // Fallback for OEMs that restrict setAlarmClock
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExactAndAllowWhileIdle(
                             AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
                         )
                     } else {
-                        deadlineAlarmManager.setAndAllowWhileIdle(
+                        alarmManager.setAndAllowWhileIdle(
                             AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
                         )
                     }
-                } else {
-                    deadlineAlarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
-                    )
                 }
             }
         }
