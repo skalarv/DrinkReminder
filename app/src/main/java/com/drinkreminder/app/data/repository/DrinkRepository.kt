@@ -24,6 +24,8 @@ class DrinkRepository @Inject constructor(
     val darkModeOption: Flow<DarkModeOption> = preferencesManager.darkModeOption
     val notificationsEnabled: Flow<Boolean> = preferencesManager.notificationsEnabled
     val bottleDeadlines: Flow<List<LocalTime>> = preferencesManager.bottleDeadlines
+    val alarmVibrate: Flow<Boolean> = preferencesManager.alarmVibrate
+    val alarmSound: Flow<Boolean> = preferencesManager.alarmSound
 
     suspend fun setDailyGoalBottles(bottles: Int) = preferencesManager.setDailyGoalBottles(bottles)
     suspend fun setActiveHoursStart(hour: Int) = preferencesManager.setActiveHoursStart(hour)
@@ -32,6 +34,8 @@ class DrinkRepository @Inject constructor(
     suspend fun setNotificationsEnabled(enabled: Boolean) = preferencesManager.setNotificationsEnabled(enabled)
     suspend fun setBottleDeadlines(deadlines: List<LocalTime>) = preferencesManager.setBottleDeadlines(deadlines)
     suspend fun clearBottleDeadlines() = preferencesManager.clearBottleDeadlines()
+    suspend fun setAlarmVibrate(enabled: Boolean) = preferencesManager.setAlarmVibrate(enabled)
+    suspend fun setAlarmSound(enabled: Boolean) = preferencesManager.setAlarmSound(enabled)
 
     // Drink logs
     suspend fun addDrink(amountMl: Int): Long {

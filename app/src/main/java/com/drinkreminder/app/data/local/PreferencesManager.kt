@@ -30,6 +30,8 @@ class PreferencesManager @Inject constructor(
         val DARK_MODE = stringPreferencesKey("dark_mode")
         val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
         val BOTTLE_DEADLINES = stringPreferencesKey("bottle_deadlines")
+        val ALARM_VIBRATE = booleanPreferencesKey("alarm_vibrate")
+        val ALARM_SOUND = booleanPreferencesKey("alarm_sound")
 
         const val DEFAULT_GOAL_BOTTLES = 3
         const val DEFAULT_BOTTLE_SIZE_ML = 800
@@ -77,6 +79,14 @@ class PreferencesManager @Inject constructor(
 
     val notificationsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[NOTIFICATIONS_ENABLED] ?: true
+    }
+
+    val alarmVibrate: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[ALARM_VIBRATE] ?: true
+    }
+
+    val alarmSound: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[ALARM_SOUND] ?: true
     }
 
     val bottleDeadlines: Flow<List<LocalTime>> = combine(
@@ -128,5 +138,13 @@ class PreferencesManager @Inject constructor(
 
     suspend fun clearBottleDeadlines() {
         context.dataStore.edit { it.remove(BOTTLE_DEADLINES) }
+    }
+
+    suspend fun setAlarmVibrate(enabled: Boolean) {
+        context.dataStore.edit { it[ALARM_VIBRATE] = enabled }
+    }
+
+    suspend fun setAlarmSound(enabled: Boolean) {
+        context.dataStore.edit { it[ALARM_SOUND] = enabled }
     }
 }

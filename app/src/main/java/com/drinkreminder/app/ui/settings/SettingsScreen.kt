@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -179,6 +180,42 @@ fun SettingsScreen(
                 Switch(
                     checked = uiState.notificationsEnabled,
                     onCheckedChange = { viewModel.setNotificationsEnabled(it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Deadline Alerts",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sound on deadline",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Checkbox(
+                    checked = uiState.alarmSound,
+                    onCheckedChange = { viewModel.setAlarmSound(it) }
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Vibrate on deadline",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Checkbox(
+                    checked = uiState.alarmVibrate,
+                    onCheckedChange = { viewModel.setAlarmVibrate(it) }
                 )
             }
         }

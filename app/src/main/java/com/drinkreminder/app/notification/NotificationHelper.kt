@@ -1,6 +1,7 @@
 package com.drinkreminder.app.notification
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -24,7 +25,9 @@ class NotificationHelper @Inject constructor(
 ) {
     companion object {
         const val CHANNEL_ID = "drink_reminders"
+        const val ALARM_CHANNEL_ID = "deadline_alarms"
         const val NOTIFICATION_ID = 1001
+        const val ALARM_NOTIFICATION_ID = 1002
     }
 
     fun createNotificationChannel() {
@@ -34,6 +37,22 @@ class NotificationHelper @Inject constructor(
             NotificationManager.IMPORTANCE_DEFAULT
         ).apply {
             description = context.getString(R.string.notification_channel_description)
+        }
+
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    fun createAlarmNotificationChannel() {
+        val channel = NotificationChannel(
+            ALARM_CHANNEL_ID,
+            context.getString(R.string.alarm_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.alarm_channel_description)
+            // Sound and vibration managed by AlarmService directly
+            setSound(null, null)
+            enableVibration(false)
         }
 
         val notificationManager = context.getSystemService(NotificationManager::class.java)
@@ -95,5 +114,54 @@ class NotificationHelper @Inject constructor(
             .build()
 
         NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+    }
+
+    fun buildAlarmNotification(
+        targetBottle: Int,
+        deadlineTime: String,
+        todayTotalMl: Int,
+        targetMl: Int
+    ): Notification {
+        createAlarmNotificationChannel()
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            context, 0, openIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, 1, openIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val snoozeIntent = Intent(context, AlarmActionReceiver::class.java).apply {
+            action = AlarmActionReceiver.ACTION_SNOOZE
+        }
+        val snoozePendingIntent = PendingIntent.getBroadcast(
+            context, 2, snoozeIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val stopIntent = Intent(context, AlarmActionReceiver::class.java).apply {
+            action = AlarmActionReceiver.ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getBroadcast(
+            context, 3, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        return NotificationCompat.Builder(context, ALARM_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setContentTitle("Deadline missed!")
+            .setContentText("Bottle $targetBottle was due by $deadlineTime. You've had ${todayTotalMl}ml of ${targetMl}ml so far.")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Bottle $targetBottle was due by $deadlineTime. You've had ${todayTotalMl}ml of ${targetMl}ml so far."))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setOngoing(true)
+            .setContentIntent(openPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .addAction(android.R.drawable.ic_popup_reminder, "Snooze 10 min", snoozePendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
+            .build()
     }
 }

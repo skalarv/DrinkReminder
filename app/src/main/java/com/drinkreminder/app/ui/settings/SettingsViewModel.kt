@@ -20,7 +20,9 @@ data class SettingsUiState(
     val activeHoursEnd: Int = 20,
     val darkModeOption: DarkModeOption = DarkModeOption.SYSTEM,
     val notificationsEnabled: Boolean = true,
-    val bottleDeadlines: List<LocalTime> = emptyList()
+    val bottleDeadlines: List<LocalTime> = emptyList(),
+    val alarmVibrate: Boolean = true,
+    val alarmSound: Boolean = true
 )
 
 @HiltViewModel
@@ -36,21 +38,34 @@ class SettingsViewModel @Inject constructor(
         repository.darkModeOption,
         combine(
             repository.notificationsEnabled,
-            repository.bottleDeadlines
-        ) { notifications, deadlines -> notifications to deadlines }
-    ) { goalBottles, startHour, endHour, darkMode, (notifications, deadlines) ->
+            repository.bottleDeadlines,
+            repository.alarmVibrate,
+            repository.alarmSound
+        ) { notifications, deadlines, vibrate, sound ->
+            NotificationPrefs(notifications, deadlines, vibrate, sound)
+        }
+    ) { goalBottles, startHour, endHour, darkMode, notifPrefs ->
         SettingsUiState(
             dailyGoalBottles = goalBottles,
             activeHoursStart = startHour,
             activeHoursEnd = endHour,
             darkModeOption = darkMode,
-            notificationsEnabled = notifications,
-            bottleDeadlines = deadlines
+            notificationsEnabled = notifPrefs.enabled,
+            bottleDeadlines = notifPrefs.deadlines,
+            alarmVibrate = notifPrefs.vibrate,
+            alarmSound = notifPrefs.sound
         )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = SettingsUiState()
+    )
+
+    private data class NotificationPrefs(
+        val enabled: Boolean,
+        val deadlines: List<LocalTime>,
+        val vibrate: Boolean,
+        val sound: Boolean
     )
 
     fun setDailyGoalBottles(bottles: Int) {
@@ -122,6 +137,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             repository.clearBottleDeadlines()
             reminderScheduler.rescheduleReminders()
+        }
+    }
+
+    fun setAlarmVibrate(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAlarmVibrate(enabled)
+        }
+    }
+
+    fun setAlarmSound(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAlarmSound(enabled)
         }
     }
 }

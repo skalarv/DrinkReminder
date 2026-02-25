@@ -20,12 +20,6 @@ class ReminderWorker @AssistedInject constructor(
     private val preferencesManager: PreferencesManager
 ) : CoroutineWorker(context, workerParams) {
 
-    companion object {
-        const val KEY_NEXT_DEADLINE = "next_deadline"
-        const val KEY_IS_BEHIND = "is_behind"
-        const val KEY_TARGET_BOTTLE = "target_bottle"
-    }
-
     override suspend fun doWork(): Result {
         val notificationsEnabled = preferencesManager.notificationsEnabled.first()
         if (!notificationsEnabled) return Result.success()
@@ -34,7 +28,6 @@ class ReminderWorker @AssistedInject constructor(
         val endHour = preferencesManager.activeHoursEnd.first()
         val now = LocalTime.now()
 
-        // Only send notifications during active hours
         if (now.isBefore(LocalTime.of(startHour, 0)) || now.isAfter(LocalTime.of(endHour, 0))) {
             return Result.success()
         }
@@ -44,49 +37,36 @@ class ReminderWorker @AssistedInject constructor(
         val goalMl = goalBottles * bottleSize
         val todayTotal = repository.getTodayTotalOnce()
 
-        if (todayTotal >= goalMl) {
-            // Goal met, no reminder needed
-            return Result.success()
-        }
+        if (todayTotal >= goalMl) return Result.success()
 
         val remainingMl = goalMl - todayTotal
         val remainingBottles = (remainingMl + bottleSize - 1) / bottleSize
 
-        // Read deadline context from inputData (set by ReminderScheduler)
-        val deadlineStr = inputData.getString(KEY_NEXT_DEADLINE)
-        val nextDeadline = deadlineStr?.let { runCatching { LocalTime.parse(it) }.getOrNull() }
-        val isBehind = inputData.getBoolean(KEY_IS_BEHIND, false)
-        val targetBottle = inputData.getInt(KEY_TARGET_BOTTLE, 0)
+        // Compute deadline context from preferences
+        val deadlines = preferencesManager.bottleDeadlines.first()
+        val completedBottles = todayTotal / bottleSize
+        val nextIdx = completedBottles.coerceAtMost(deadlines.size - 1)
 
-        // If no inputData deadline, try to compute from preferences (periodic fallback)
-        val effectiveDeadline: LocalTime?
-        val effectiveIsBehind: Boolean
-        val effectiveTarget: Int
-        if (nextDeadline != null) {
-            effectiveDeadline = nextDeadline
-            effectiveIsBehind = isBehind
-            effectiveTarget = targetBottle
+        val nextDeadline: LocalTime?
+        val isBehind: Boolean
+        val targetBottle: Int
+
+        if (deadlines.isNotEmpty()) {
+            nextDeadline = deadlines[nextIdx]
+            isBehind = now.isAfter(nextDeadline)
+            targetBottle = nextIdx + 1
         } else {
-            val deadlines = preferencesManager.bottleDeadlines.first()
-            val completedBottles = todayTotal / bottleSize
-            val nextIdx = completedBottles.coerceAtMost(deadlines.size - 1)
-            if (deadlines.isNotEmpty()) {
-                effectiveDeadline = deadlines[nextIdx]
-                effectiveIsBehind = now.isAfter(effectiveDeadline)
-                effectiveTarget = nextIdx + 1
-            } else {
-                effectiveDeadline = null
-                effectiveIsBehind = false
-                effectiveTarget = 0
-            }
+            nextDeadline = null
+            isBehind = false
+            targetBottle = 0
         }
 
         notificationHelper.createNotificationChannel()
         notificationHelper.showReminderNotification(
             remainingBottles = remainingBottles,
-            nextDeadline = effectiveDeadline,
-            isBehind = effectiveIsBehind,
-            targetBottle = effectiveTarget
+            nextDeadline = nextDeadline,
+            isBehind = isBehind,
+            targetBottle = targetBottle
         )
 
         return Result.success()

@@ -5,4 +5,6 @@
     <string name="widget_description">Track your daily water intake</string>
     <string name="notification_channel_name">Drink Reminders</string>
     <string name="notification_channel_description">Reminders to drink water throughout the day</string>
+    <string name="alarm_channel_name">Deadline Alerts</string>
+    <string name="alarm_channel_description">Alarm-style alerts when you miss a hydration deadline</string>
 </resources>

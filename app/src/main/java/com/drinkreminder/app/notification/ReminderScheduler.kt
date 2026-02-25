@@ -1,11 +1,13 @@
 package com.drinkreminder.app.notification
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.drinkreminder.app.data.local.PreferencesManager
 import com.drinkreminder.app.data.repository.DrinkRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,7 +27,10 @@ class ReminderScheduler @Inject constructor(
 ) {
     companion object {
         const val PERIODIC_WORK_NAME = "drink_reminder_periodic"
-        const val ONE_TIME_WORK_TAG = "drink_reminder_onetime"
+        private const val ALARM_BASE_REQUEST_CODE = 2000
+        private const val DEADLINE_ALARM_BASE_REQUEST_CODE = 3000
+        private const val MAX_ALARMS = 10
+        private const val MAX_DEADLINE_ALARMS = 10
     }
 
     suspend fun rescheduleReminders() {
@@ -35,10 +40,9 @@ class ReminderScheduler @Inject constructor(
             return
         }
 
-        val workManager = WorkManager.getInstance(context)
-
-        // Cancel existing one-time reminders
-        workManager.cancelAllWorkByTag(ONE_TIME_WORK_TAG)
+        // Cancel existing alarms before scheduling new ones
+        cancelAlarms()
+        cancelDeadlineAlarms()
 
         val goalBottles = preferencesManager.dailyGoalBottles.first()
         val bottleSize = preferencesManager.bottleSizeMl.first()
@@ -46,7 +50,6 @@ class ReminderScheduler @Inject constructor(
         val todayTotal = repository.getTodayTotalOnce()
 
         if (todayTotal >= goalMl) {
-            // Goal already met, no reminders needed
             return
         }
 
@@ -59,7 +62,6 @@ class ReminderScheduler @Inject constructor(
         val currentTime = now.toLocalTime()
 
         if (currentTime.isAfter(activeEnd)) {
-            // Past active hours
             return
         }
 
@@ -68,7 +70,6 @@ class ReminderScheduler @Inject constructor(
 
         if (remainingBottles <= 0) return
 
-        // Find the next deadline (first deadline for a bottle not yet completed)
         val nextDeadlineIdx = completedBottles.coerceIn(0, deadlines.size - 1)
 
         // Collect all reminder times to schedule
@@ -81,12 +82,11 @@ class ReminderScheduler @Inject constructor(
 
             if (isBehind) {
                 // Behind schedule: immediate urgent reminder + every 30 min
-                // until the next future deadline or end of active hours
                 val futureDeadline = deadlines.drop(nextDeadlineIdx + 1)
                     .firstOrNull { currentTime.isBefore(it) }
                 val urgentEnd = futureDeadline ?: activeEnd
 
-                // Immediate reminder
+                // Immediate reminder (1 minute from now)
                 reminderTimes.add(
                     ScheduledReminder(
                         time = currentTime.plusMinutes(1),
@@ -110,7 +110,7 @@ class ReminderScheduler @Inject constructor(
                     next = next.plusMinutes(30)
                 }
             } else {
-                // On schedule: schedule at halfway, 30 min before, and 10 min before deadline
+                // On schedule: halfway, 30 min before, and 10 min before deadline
                 val minutesUntilDeadline = Duration.between(currentTime, nextDeadline).toMinutes()
 
                 val halfwayTime = currentTime.plusMinutes(minutesUntilDeadline / 2)
@@ -145,33 +145,86 @@ class ReminderScheduler @Inject constructor(
             }
         }
 
-        // Schedule the one-time work requests
-        for (reminder in reminderTimes) {
+        // Schedule exact alarms for each reminder
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        reminderTimes.take(MAX_ALARMS).forEachIndexed { index, reminder ->
             val delayMinutes = Duration.between(currentTime, reminder.time).toMinutes()
             if (delayMinutes > 0) {
-                val data = workDataOf(
-                    ReminderWorker.KEY_NEXT_DEADLINE to reminder.deadline.toString(),
-                    ReminderWorker.KEY_IS_BEHIND to reminder.isBehind,
-                    ReminderWorker.KEY_TARGET_BOTTLE to reminder.targetBottle
+                val intent = Intent(context, AlarmReceiver::class.java).apply {
+                    putExtra(AlarmReceiver.EXTRA_NEXT_DEADLINE, reminder.deadline.toString())
+                    putExtra(AlarmReceiver.EXTRA_IS_BEHIND, reminder.isBehind)
+                    putExtra(AlarmReceiver.EXTRA_TARGET_BOTTLE, reminder.targetBottle)
+                }
+
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    ALARM_BASE_REQUEST_CODE + index,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
 
-                val workRequest = OneTimeWorkRequestBuilder<ReminderWorker>()
-                    .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
-                    .setInputData(data)
-                    .addTag(ONE_TIME_WORK_TAG)
-                    .build()
+                val triggerTimeMs = System.currentTimeMillis() + delayMinutes * 60 * 1000
 
-                workManager.enqueue(workRequest)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent
+                        )
+                    } else {
+                        alarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent
+                        )
+                    }
+                } else {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP, triggerTimeMs, pendingIntent
+                    )
+                }
             }
         }
 
-        // Periodic fallback check every 1 hour
+        // Schedule deadline-check alarms at exact deadline times
+        val deadlineAlarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        deadlines.forEachIndexed { index, deadline ->
+            if (index < MAX_DEADLINE_ALARMS && deadline.isAfter(currentTime)) {
+                val deadlineIntent = Intent(context, AlarmReceiver::class.java).apply {
+                    putExtra(AlarmReceiver.EXTRA_IS_DEADLINE_CHECK, true)
+                }
+                val deadlinePendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    DEADLINE_ALARM_BASE_REQUEST_CODE + index,
+                    deadlineIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                val deadlineDelayMinutes = Duration.between(currentTime, deadline).toMinutes()
+                val deadlineTriggerTimeMs = System.currentTimeMillis() + deadlineDelayMinutes * 60 * 1000
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (deadlineAlarmManager.canScheduleExactAlarms()) {
+                        deadlineAlarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
+                        )
+                    } else {
+                        deadlineAlarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
+                        )
+                    }
+                } else {
+                    deadlineAlarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP, deadlineTriggerTimeMs, deadlinePendingIntent
+                    )
+                }
+            }
+        }
+
+        // Periodic WorkManager fallback every 1 hour
         val periodicWork = PeriodicWorkRequestBuilder<ReminderWorker>(
             1, TimeUnit.HOURS,
             15, TimeUnit.MINUTES
         ).build()
 
-        workManager.enqueueUniquePeriodicWork(
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             PERIODIC_WORK_NAME,
             ExistingPeriodicWorkPolicy.UPDATE,
             periodicWork
@@ -179,9 +232,37 @@ class ReminderScheduler @Inject constructor(
     }
 
     fun cancelReminders() {
-        val workManager = WorkManager.getInstance(context)
-        workManager.cancelAllWorkByTag(ONE_TIME_WORK_TAG)
-        workManager.cancelUniqueWork(PERIODIC_WORK_NAME)
+        cancelAlarms()
+        cancelDeadlineAlarms()
+        WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
+    }
+
+    private fun cancelAlarms() {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        for (i in 0 until MAX_ALARMS) {
+            val intent = Intent(context, AlarmReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                ALARM_BASE_REQUEST_CODE + i,
+                intent,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            )
+            pendingIntent?.let { alarmManager.cancel(it) }
+        }
+    }
+
+    private fun cancelDeadlineAlarms() {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        for (i in 0 until MAX_DEADLINE_ALARMS) {
+            val intent = Intent(context, AlarmReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                DEADLINE_ALARM_BASE_REQUEST_CODE + i,
+                intent,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            )
+            pendingIntent?.let { alarmManager.cancel(it) }
+        }
     }
 
     private data class ScheduledReminder(
